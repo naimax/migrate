@@ -1,18 +1,21 @@
 package gitlab
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"net/http/httputil"
 	nurl "net/url"
 	"os"
 	"strconv"
 	"strings"
-)
+	"time"
 
-import (
+	httplogger "github.com/ernesto-jimenez/httplogger"
 	"github.com/golang-migrate/migrate/v4/source"
 	"github.com/xanzy/go-gitlab"
 )
@@ -45,6 +48,32 @@ type Gitlab struct {
 type Config struct {
 }
 
+type httpLogger struct {
+	log *log.Logger
+}
+
+func newHTTPLogger() *httpLogger {
+	return &httpLogger{
+		log: log.New(os.Stderr, "[DEBUG] ", log.LstdFlags),
+	}
+}
+
+func (l *httpLogger) LogRequest(req *http.Request) {
+	dump, err := httputil.DumpRequestOut(req, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+	l.log.Printf("HTTP Request follows...\n%s\n---", string(dump))
+}
+
+func (l *httpLogger) LogResponse(req *http.Request, res *http.Response, err error, duration time.Duration) {
+	dump, err := httputil.DumpResponse(res, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+	l.log.Printf("HTTP Response follows...\n%s\n---", string(dump))
+}
+
 func (g *Gitlab) Open(url string) (source.Driver, error) {
 	u, err := nurl.Parse(url)
 	if err != nil {
@@ -60,8 +89,13 @@ func (g *Gitlab) Open(url string) (source.Driver, error) {
 		return nil, ErrNoAccessToken
 	}
 
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	logTr := httplogger.NewLoggedTransport(tr, newHTTPLogger())
+
 	gn := &Gitlab{
-		client:     gitlab.NewClient(nil, password),
+		client:     gitlab.NewClient(&http.Client{Transport: logTr}, password),
 		url:        url,
 		migrations: source.NewMigrations(),
 	}
